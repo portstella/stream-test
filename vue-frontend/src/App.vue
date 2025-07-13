@@ -17,14 +17,23 @@ async function startStream() {
   abortController = new AbortController(); // 为新的请求创建控制器
 
   try {
-    // 调用Spring Boot后端API
-    const response = await fetch('/api/stream', {
+    // 构造符合OpenAI格式的请求体
+    const requestBody = {
+      model: "gpt-3.5-turbo-simulated", // 可以是任何你想要传递的模型标识
+      messages: [
+        { role: "user", content: prompt.value }
+      ],
+      stream: true
+    };
+
+    // 调用Spring Boot后端的OpenAI兼容API
+    const response = await fetch('/v1/chat/completions', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Accept': 'text/plain' // 明确希望接收普通文本流
+        'Accept': 'text/event-stream' // 明确希望接收SSE流
       },
-      body: JSON.stringify({ prompt: prompt.value }),
+      body: JSON.stringify(requestBody),
       signal: abortController.signal // 关联AbortSignal
     });
 
@@ -32,20 +41,40 @@ async function startStream() {
       throw new Error(`HTTP error! status: ${response.status}`);
     }
 
-    // 获取响应的ReadableStream读取器
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
 
-    // 循环读取流中的数据块
     while (true) {
       const { done, value } = await reader.read();
       if (done) {
-        // 流结束
         break;
       }
-      // 将Uint8Array块解码为字符串并追加到响应中
       const chunk = decoder.decode(value);
-      streamedResponse.value += chunk;
+      console.log("--- Raw Chunk Received ---", chunk); // 调试：打印原始数据块
+
+      // 解析SSE事件
+      const lines = chunk.split('\n').filter(line => line.trim() !== '');
+      for (const line of lines) {
+        console.log("Processing line:", line); // 调试：打印正在处理的行
+        if (line.startsWith('data:')) {
+          const data = line.substring(5);
+          if (data === '[DONE]') {
+            console.log("Stream finished.");
+            return; // 流结束
+          }
+          try {
+            const parsed = JSON.parse(data);
+            console.log("Parsed data:", parsed); // 调试：打印解析后的JSON
+            if (parsed.choices && parsed.choices[0].delta && parsed.choices[0].delta.content) {
+              const content = parsed.choices[0].delta.content;
+              console.log("Appending content:", content); // 调试：打印要追加的内容
+              streamedResponse.value += content;
+            }
+          } catch (e) {
+            console.error('Error parsing SSE data:', data, e);
+          }
+        }
+      }
     }
 
   } catch (error) {
@@ -73,7 +102,7 @@ function cancelStream() {
   <div class="container">
     <h1>Gemini 流式调用演示</h1>
     <p>Vue -> Spring Boot -> Python (FastAPI) -> LLM</p>
-    
+
     <div class="input-area">
       <input v-model="prompt" placeholder="在这里输入你的问题..." @keyup.enter="startStream" :disabled="isLoading" />
       <button @click="startStream" :disabled="isLoading">
@@ -98,11 +127,13 @@ function cancelStream() {
   font-family: sans-serif;
   padding: 1rem;
 }
+
 .input-area {
   display: flex;
   gap: 10px;
   margin-bottom: 1.5rem;
 }
+
 input {
   flex-grow: 1;
   padding: 10px;
@@ -110,6 +141,7 @@ input {
   border: 1px solid #ccc;
   border-radius: 4px;
 }
+
 button {
   padding: 10px 20px;
   font-size: 1rem;
@@ -120,12 +152,16 @@ button {
   cursor: pointer;
   white-space: nowrap;
 }
+
 button:disabled {
   background-color: #ccc;
 }
+
 .cancel-button {
-  background-color: #f44336; /* 红色 */
+  background-color: #f44336;
+  /* 红色 */
 }
+
 .response-area {
   border: 1px solid #eee;
   padding: 1rem;
@@ -133,8 +169,10 @@ button:disabled {
   min-height: 100px;
   border-radius: 4px;
 }
+
 pre {
-  white-space: pre-wrap; /* 自动换行 */
+  white-space: pre-wrap;
+  /* 自动换行 */
   word-wrap: break-word;
   font-family: monospace;
 }

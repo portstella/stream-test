@@ -11,7 +11,7 @@ public class WebClientConfig {
     public WebClient pythonWebClient() {
         // 配置WebClient以指向我们的Python服务
         return WebClient.builder()
-                .baseUrl("http://localhost:8000") // Python服务地址
+                .baseUrl("http://localhost:8001") // Python服务地址
                 .build();
     }
 }

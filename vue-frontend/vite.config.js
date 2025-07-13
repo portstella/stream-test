@@ -10,6 +10,11 @@ export default defineConfig({
       '/api': {
         target: 'http://localhost:8080',
         changeOrigin: true,
+      },
+      // 新增：将/v1开头的请求也代理到Spring Boot服务
+      '/v1': {
+        target: 'http://localhost:8080',
+        changeOrigin: true,
       }
     }
   }

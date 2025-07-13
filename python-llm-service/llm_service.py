@@ -1,57 +1,111 @@
 import asyncio
-import os
+import json
+import time
+import uuid
+from typing import List, Optional
+
 from fastapi import FastAPI
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-# import openai # 真实场景取消注释
-
-# 真实场景: 从环境变量加载API Key
-# openai.api_key = os.getenv("OPENAI_API_KEY")
 
 app = FastAPI()
 
-class PromptRequest(BaseModel):
-    prompt: str
+# --- Pydantic Models for OpenAI compatibility ---
 
-# 模拟一个异步的LLM流式生成器
-async def fake_llm_stream_generator(prompt: str):
+class ChatMessage(BaseModel):
+    role: str
+    content: str
+
+class ChatCompletionRequest(BaseModel):
+    model: str
+    messages: List[ChatMessage]
+    stream: Optional[bool] = False
+    # Add other OpenAI parameters as needed, e.g., temperature, max_tokens
+
+async def openai_format_stream_generator(messages: List[ChatMessage]):
     """
-    这是一个模拟的LLM流式生成器。
-    在真实场景中，这里会调用 openai.ChatCompletion.create(..., stream=True)
-    并遍历返回的流。
+    Simulates a streaming response in the format of OpenAI's Chat Completions API.
+    Yields data in Server-Sent Events (SSE) format.
     """
-    # 模拟思考时间
-    await asyncio.sleep(0.5)
+    chat_id = f"chatcmpl-{uuid.uuid4()}"
+    created_timestamp = int(time.time())
     
-    # 模拟逐字回复
-    response_text = f"这是对您的问题 '{prompt}' 的一个流式回答。我将逐字或逐词地生成内容，模拟真实AI的思考过程。\n这是第二条撒旦发生发射点"
+    # Extract the last user prompt to include in the response
+    user_prompt = "your prompt"
+    if messages and messages[-1].role == "user":
+        user_prompt = messages[-1].content
+
+    response_text = f"This is a simulated \n\nstreaming response to your prompt: '{user_prompt}'. I am generating token by token to mimic the real OpenAI API behavior."
+    
+    # 1. First chunk: Send the role
+    first_chunk_payload = {
+        "id": chat_id,
+        "object": "chat.completion.chunk",
+        "created": created_timestamp,
+        "model": "gpt-3.5-turbo-simulated",
+        "choices": [
+            {
+                "index": 0,
+                "delta": {"role": "assistant", "content": ""},
+                "finish_reason": None
+            }
+        ]
+    }
+    yield f"data: {json.dumps(first_chunk_payload)}\n\n"
+    await asyncio.sleep(0.05) # Small delay
+
+    # 2. Subsequent chunks: Send content word by word
     try:
-        for char in response_text:
-            yield char # 逐字返回
-            await asyncio.sleep(0.05) # 模拟每个字之间的延迟
+        for word in response_text.split(" "):
+            chunk_payload = {
+                "id": chat_id,
+                "object": "chat.completion.chunk",
+                "created": created_timestamp,
+                "model": "gpt-3.5-turbo-simulated",
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {"content": f"{word} "},
+                        "finish_reason": None
+                    }
+                ]
+            }
+            yield f"data: {json.dumps(chunk_payload)}\n\n"
+            await asyncio.sleep(0.1) # Simulate token generation delay
+
+        # 3. Final chunk: Signal the end of the stream
+        final_chunk_payload = {
+            "id": chat_id,
+            "object": "chat.completion.chunk",
+            "created": created_timestamp,
+            "model": "gpt-3.5-turbo-simulated",
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {},
+                    "finish_reason": "stop"
+                }
+            ]
+        }
+        yield f"data: {json.dumps(final_chunk_payload)}\n\n"
+
+        # 4. Termination signal
+        yield "data: [DONE]\n\n"
+        
     except asyncio.CancelledError:
         print("Stream cancelled by client.")
-        # 在这里可以添加任何必要的清理逻辑
-        raise # 重新引发异常以确保FastAPI正确处理取消
+        raise
 
-@app.post("/stream")
-async def stream_prompt(request: PromptRequest):
-    """
-    接收prompt，并以流的形式返回LLM的响应。
-    """
-    # 真实场景的调用示例:
-    # response = openai.ChatCompletion.create(
-    #     model="gpt-4",
-    #     messages=[{"role": "user", "content": request.prompt}],
-    #     stream=True
-    # )
-    # async def event_generator():
-    #     for chunk in response:
-    #         content = chunk.choices[0].delta.get("content", "")
-    #         if content:
-    #             yield content
-    
-    # 使用模拟生成器
-    return StreamingResponse(fake_llm_stream_generator(request.prompt), media_type="text/plain")
 
-# 运行命令: uvicorn llm_service:app --host 0.0.0.0 --port 8000
+@app.post("/v1/chat/completions")
+async def chat_completions(request: ChatCompletionRequest):
+    """
+    An endpoint that mimics OpenAI's chat completions streaming API.
+    """
+    return StreamingResponse(
+        openai_format_stream_generator(request.messages),
+        media_type="text/event-stream"
+    )
+
+# To run this service:
+# uvicorn llm_service:app --host 0.0.0.0 --port 8001
